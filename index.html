@@ -40,9 +40,18 @@ textarea{resize:vertical;min-height:44px}
     <input type="text" id="proyek" placeholder="Nama pekerjaan / bangunan">
     <label for="lokasi">Lokasi</label>
     <input type="text" id="lokasi" placeholder="Alamat proyek">
-    <label for="pengawas">Pengawas</label>
+    <label for="pengawas">Nama Pihak Kedua (pengawas baru)</label>
     <input type="text" id="pengawas" placeholder="Nama pengawas">
   </div>
+
+  <div class="card">
+    <label for="room">Kode sinkron (rahasia)</label>
+    <input type="text" id="room" placeholder="Tempel kode dari ponsel lain, atau buat baru">
+    <div class="row" style="margin-top:8px"><button class="btn sec" id="newroom">Buat kode baru</button><button class="btn sec" id="useroom">Pakai kode ini</button></div>
+    <div class="hint">Semua ponsel dengan kode yang sama berbagi foto yang sama. Tanpa login. Jangan bagikan kode ke orang lain.</div>
+  </div>
+
+  <div class="card" id="ba"><b style="font-size:14px">Data berita acara</b></div>
 
   <div class="card">
     <label for="item">Item / lokasi foto berikutnya</label>
@@ -56,18 +65,22 @@ textarea{resize:vertical;min-height:44px}
     <div class="hint">Isi item dulu, lalu ambil foto. Nama item ikut tercetak di foto bersama tanggal dan jam.</div>
   </div>
 
+  <button class="btn sec" id="sync" style="margin-bottom:10px">Unggah foto ke Drive (0 tertunda)</button>
   <div class="row" style="margin-bottom:12px">
-    <button class="btn" id="drive" disabled>Simpan ke Drive</button>
-    <button class="btn sec" id="pdf" disabled>Unduh PDF</button>
+    <button class="btn" id="drive" disabled>Muat foto dari cloud</button>
+    <button class="btn sec" id="pdf" disabled>Bagikan / Unduh PDF</button>
   </div>
-  <p class="hint" id="dlink" style="margin-top:-4px">Simpan ke Drive mengunggah PDF ke folder “Dokumentasi Pengawasan”. Foto juga tersimpan di perangkat ini, jadi jangan bersihkan data browser sebelum PDF aman di Drive.</p>
+  <p class="hint" id="dlink" style="margin-top:-4px">Foto otomatis tersinkron ke cloud (Firebase) selama Kode sinkron terisi, jadi bisa dibuka dari ponsel mana pun. PDF dibuat dari semua foto, lalu dibagikan atau disimpan ke Drive lewat menu bagikan.</p>
 
   <h2 style="font-size:15px;margin:18px 0 8px"><span id="cnt">0</span> foto</h2>
   <div id="list"></div>
 </main>
 <div id="toast"></div>
 
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
 <script>
 const $ = s => document.querySelector(s);
 let db = null, photos = [];
@@ -98,7 +111,11 @@ const savePhoto = p => idb('readwrite', s=>s.put(p));
 const delPhoto = id => idb('readwrite', s=>s.delete(id));
 
 // ---- data proyek (localStorage, dibungkus try/catch) ----
-const F=['proyek','lokasi','pengawas'];
+const DEF={proyek:'S-Walk',lokasi:'Tlk. Tering, Kec. Batam Kota',pengawas:'Farhan Rizky Farantino',nomor:'001',p1:'Yudi Arto',p1j:'Project Officer (PO)',p2j:'Drafter',bayar:'45'};
+const SPEC=[['nomor','Nomor BA'],['tgl','Hari / tanggal serah terima'],['kontrak','Nomor kontrak'],['kontraktor','Penyedia jasa / kontraktor'],['efektif','Tanggal efektif tugas beralih'],['p1','Nama Pihak Pertama (pengawas sebelumnya)'],['p1j','Jabatan Pihak Pertama'],['p2j','Jabatan Pihak Kedua'],['bayar','Penagihan yang sudah dibayarkan (%)'],['progres','Progres fisik di lapangan (%)'],['atasan','Nama atasan (Mengetahui)'],['atasanj','Jabatan atasan']];
+SPEC.forEach(([k,l])=>{ const a=document.createElement('label'); a.htmlFor=k; a.textContent=l; const i=document.createElement('input'); i.type='text'; i.id=k; i.value=DEF[k]||''; $('#ba').append(a,i); });
+Object.keys(DEF).forEach(k=>{ const e=$('#'+k); if(e&&!e.value) e.value=DEF[k]; });
+const F=['proyek','lokasi','pengawas',...SPEC.map(x=>x[0])];
 function loadMeta(){ try{ const m=JSON.parse(localStorage.getItem('meta')||'{}'); F.forEach(k=>{ if(m[k]) $('#'+k).value=m[k]; }); }catch(e){} }
 function saveMeta(){ try{ const m={}; F.forEach(k=>m[k]=$('#'+k).value); localStorage.setItem('meta',JSON.stringify(m)); }catch(e){} }
 F.forEach(k=>$('#'+k).addEventListener('input',saveMeta));
@@ -119,7 +136,7 @@ function loadImg(file){
 
 async function processFile(file){
   const now=new Date(), im=await loadImg(file);
-  const max=1280, sc=Math.min(1, max/Math.max(im.width,im.height));
+  const max=1100, sc=Math.min(1, max/Math.max(im.width,im.height));
   const w=Math.round(im.width*sc), h=Math.round(im.height*sc);
   const c=document.createElement('canvas'); c.width=w; c.height=h;
   const x=c.getContext('2d'); x.drawImage(im,0,0,w,h);
@@ -131,7 +148,7 @@ async function processFile(file){
     x.fillText(ts, fs*0.6, h-bar+fs*1.0);
     x.font=fs+'px sans-serif'; x.fillText(item.slice(0,70), fs*0.6, h-bar+fs*2.1);
   } else x.fillText(ts, fs*0.6, h-bar/2);
-  const p={id:now.getTime()+'-'+Math.random().toString(36).slice(2,6), t:now.getTime(), ts, item, note:$('#note').value.trim(), w, h, img:c.toDataURL('image/jpeg',0.82)};
+  const p={id:now.getTime()+'-'+Math.random().toString(36).slice(2,6), t:now.getTime(), ts, item, note:$('#note').value.trim(), w, h, img:c.toDataURL('image/jpeg',0.72)};
   photos.push(p); await savePhoto(p);
 }
 
@@ -148,93 +165,147 @@ function render(){
   photos.sort((a,b)=>a.t-b.t);
   $('#cnt').textContent=photos.length;
   $('#pdf').disabled=!photos.length; $('#drive').disabled=!photos.length;
+  upd();
   const L=$('#list'); L.textContent='';
   [...photos].reverse().forEach(p=>{
     const n=photos.indexOf(p)+1, d=document.createElement('div'); d.className='card ph';
     const im=document.createElement('img'); im.src=p.img; d.appendChild(im);
     const a=document.createElement('input'); a.type='text'; a.value=p.item; a.placeholder='Item / lokasi'; a.style.marginTop='8px';
-    a.onchange=()=>{p.item=a.value.trim(); savePhoto(p)};
+    a.onchange=()=>{p.item=a.value.trim(); savePhoto(p); if(user&&p.up) push(p).catch(()=>{});};
     const b=document.createElement('textarea'); b.value=p.note; b.placeholder='Catatan'; b.style.marginTop='6px';
-    b.onchange=()=>{p.note=b.value.trim(); savePhoto(p)};
+    b.onchange=()=>{p.note=b.value.trim(); savePhoto(p); if(user&&p.up) push(p).catch(()=>{});};
     const m=document.createElement('div'); m.className='meta';
-    const s=document.createElement('span'); s.textContent='#'+n+' · '+p.ts;
+    const s=document.createElement('span'); s.textContent='#'+n+' · '+p.ts+(p.up?' · ✓ cloud':'');
     const x=document.createElement('button'); x.className='del'; x.textContent='Hapus';
-    x.onclick=async()=>{ if(!confirm('Hapus foto ini?')) return; photos=photos.filter(q=>q!==p); await delPhoto(p.id); render(); };
+    x.onclick=async()=>{ if(!confirm('Hapus foto ini?')) return; photos=photos.filter(q=>q!==p); await delPhoto(p.id); if(user) col().doc(p.id).delete().catch(()=>{}); render(); };
     m.append(s,x); d.append(a,b,m); L.appendChild(d);
   });
 }
 
 // ---- ekspor PDF ----
-const FOLDER='11HdIdyAwlNsuYaWIbl9fQ-l6_bO4GxV7';
+
+function bast(d,list){
+  const W=210,M=18,BW=W-2*M; let y=20;
+  const v=k=>($('#'+k).value||'').trim()||'[........]';
+  const need=h=>{ if(y+h>278){ d.addPage(); y=20; } };
+  const P=(t,o={})=>{ d.setFont('helvetica',o.b?'bold':'normal'); d.setFontSize(o.s||10); const L=d.splitTextToSize(t,BW-(o.i||0)); need(L.length*5+2); if(o.c) d.text(L,W/2,y,{align:'center'}); else d.text(L,M+(o.i||0),y); y+=L.length*5+(o.g==null?2:o.g); };
+  const H=t=>{ need(14); y+=3; P(t,{b:1,s:11,g:3}); };
+  P('BERITA ACARA SERAH TERIMA TUGAS PENGAWASAN BANGUNAN',{b:1,s:12,c:1,g:2});
+  P('Nomor: '+v('nomor'),{c:1,g:6});
+  H('1. Dasar dan Maksud');
+  P('Pada hari/tanggal '+v('tgl')+', bertempat di '+v('lokasi')+', telah dilakukan serah terima tugas pengawasan pekerjaan '+v('proyek')+'. Berita acara ini mencatat kondisi pekerjaan di lapangan pada saat serah terima, sehingga jelas batas tanggung jawab antara pengawas sebelumnya dan pengawas yang menerima tugas.');
+  H('2. Para Pihak');
+  P('Pihak Pertama (yang menyerahkan): '+v('p1')+', '+v('p1j'),{i:3});
+  P('Pihak Kedua (yang menerima): '+v('pengawas')+', '+v('p2j'),{i:3});
+  H('3. Data Pekerjaan');
+  P('Nama pekerjaan: '+v('proyek'),{i:3,g:1}); P('Lokasi: '+v('lokasi'),{i:3,g:1}); P('Nomor kontrak: '+v('kontrak'),{i:3,g:1}); P('Penyedia jasa: '+v('kontraktor'),{i:3,g:1}); P('Tanggal efektif tugas beralih ke Pihak Kedua: '+v('efektif'),{i:3});
+  H('4. Status Penagihan dan Progres Fisik');
+  P('Penagihan yang telah dibayarkan sampai tanggal serah terima: '+v('bayar')+'% dari nilai kontrak.',{i:3,g:1});
+  P('Progres fisik di lapangan berdasarkan pemeriksaan bersama: '+v('progres')+'%.',{i:3,g:1});
+  P('Pihak Kedua mencatat adanya ketidaksesuaian antara persentase penagihan yang telah dibayarkan dengan kondisi fisik di lapangan sebagaimana diuraikan pada Bagian 5. Penagihan dan pengesahan progres sebelum tanggal serah terima dilakukan di bawah pengawasan Pihak Pertama.',{i:3});
+  H('5. Daftar Kondisi, Kekurangan, dan Catatan Pekerjaan');
+  d.autoTable({startY:y,margin:{left:M,right:M},head:[['No','Item / Lokasi','Kondisi / Catatan','Waktu Foto','Foto']],body:list.map((p,i)=>[i+1,p.item||'-',p.note||'-',p.ts,'Foto '+(i+1)]),styles:{fontSize:8,cellPadding:1.8},headStyles:{fillColor:[50,50,50]},columnStyles:{0:{cellWidth:10},3:{cellWidth:38},4:{cellWidth:16}}});
+  y=d.lastAutoTable.finalY+4;
+  H('6. Dokumen yang Diserahkan');
+  P('[ ] Kontrak dan addendum   [ ] Gambar kerja / as built   [ ] RAB dan kurva S   [ ] Laporan harian, mingguan, bulanan   [ ] Berita acara opname   [ ] Dokumen penagihan dan pembayaran   [ ] Hasil uji material   [ ] Foto dokumentasi   [ ] Instruksi lapangan dan korespondensi dengan kontraktor',{i:3});
+  H('7. Pernyataan');
+  ['Pihak Pertama menyatakan telah menyerahkan tugas pengawasan beserta seluruh informasi yang diketahuinya mengenai kondisi pekerjaan sampai tanggal serah terima.','Pihak Kedua menerima tugas pengawasan sejak tanggal efektif serah terima dan bertanggung jawab atas pengawasan setelah tanggal tersebut.','Kondisi, kekurangan, dan ketidaksesuaian pada Bagian 5 sudah ada sebelum tanggal serah terima. Pengesahan progres dan penagihan sebelum tanggal serah terima bukan tanggung jawab Pihak Kedua.','Pihak Kedua akan menindaklanjuti kekurangan tersebut dengan teguran atau instruksi tertulis kepada penyedia jasa dan melaporkannya kepada pimpinan.','Berita acara ini dibuat rangkap [..] bermaterai cukup dan mempunyai kekuatan yang sama.'].forEach((t,i)=>P((i+1)+'. '+t,{i:3}));
+  need(62); y+=6;
+  d.setFont('helvetica','normal'); d.setFontSize(10);
+  d.text('Pihak Pertama',M+10,y); d.text('Pihak Kedua',W-M-45,y);
+  d.text('( '+v('p1')+' )',M+2,y+28); d.text('( '+v('pengawas')+' )',W-M-52,y+28);
+  d.text('Mengetahui,',W/2,y+38,{align:'center'}); d.text('( '+v('atasan')+' )',W/2,y+62,{align:'center'}); d.setFontSize(8); d.text(v('atasanj'),W/2,y+66,{align:'center'});
+  // lampiran foto
+  list.forEach((p,i)=>{
+    if(i%2===0){ d.addPage(); d.setFont('helvetica','bold'); d.setFontSize(11); d.text('LAMPIRAN: DOKUMENTASI FOTO',M,14); }
+    const top=22+(i%2)*134, bw=BW, bh=96, sc=Math.min(bw/p.w,bh/p.h), iw=p.w*sc, ih=p.h*sc;
+    d.addImage(p.img,'JPEG',M+(bw-iw)/2,top,iw,ih);
+    let ty=top+bh+6;
+    d.setFont('helvetica','bold'); d.setFontSize(10); d.text('Foto '+(i+1)+(p.item?' - '+p.item:''),M,ty,{maxWidth:BW}); ty+=5;
+    d.setFont('helvetica','normal'); d.setFontSize(9); d.setTextColor(90); d.text(p.ts,M,ty); ty+=5; d.setTextColor(0);
+    if(p.note) d.text(d.splitTextToSize('Catatan: '+p.note,BW).slice(0,3),M,ty);
+  });
+}
+// ---- Firebase (login Google + Firestore) ----
+// GANTI nilai di bawah dengan firebaseConfig milikmu (Project settings > Your apps > Web).
+const FB={apiKey:'AIzaSyD9LAXbm6MgdNpCe8eWqsTGb30dkduUEpc',authDomain:'bast-f56b8.firebaseapp.com',projectId:'bast-f56b8',appId:'1:407901148261:web:69a53e963d9b5b45ebe28c'};
+let fs=null, user=null, room='';
+const ready=()=>!FB.apiKey.startsWith('GANTI')&&window.firebase;
+function fbInit(){
+  if(!ready()) return false;
+  firebase.initializeApp(FB); fs=firebase.firestore();
+  let r=''; try{ r=localStorage.getItem('room')||''; }catch(e){}
+  setRoom(r||newCode());
+  return true;
+}
+const newCode=()=>'swalk-'+[...crypto.getRandomValues(new Uint8Array(20))].map(b=>(b%36).toString(36)).join('');
+function setRoom(r){
+  r=(r||'').trim().replace(/[^A-Za-z0-9_-]/g,'');
+  if(r.length<12){ toast('Kode terlalu pendek (minimal 12 karakter)',4000); return; }
+  room=r; user=r; try{ localStorage.setItem('room',r); }catch(e){}
+  $('#room').value=r; upd(); pull().catch(()=>{});
+}
+$('#newroom').addEventListener('click',()=>{ if(!ready()){ toast('Konfigurasi Firebase belum diisi',4000); return; } if(confirm('Buat kode baru? Foto di ponsel ini tidak akan terhubung ke kode lama.')) setRoom(newCode()); });
+$('#useroom').addEventListener('click',()=>{ if(!ready()){ toast('Konfigurasi Firebase belum diisi',4000); return; } setRoom($('#room').value); });
+function upd(){
+  const n=photos.filter(p=>!p.up).length;
+  $('#sync').textContent=user?'Sinkronkan ke cloud ('+n+' tertunda)':'Isi Kode sinkron untuk mulai';
+  $('#drive').disabled=!user;
+}
+const col=()=>fs.collection('rooms').doc(room).collection('photos');
+const push=p=>col().doc(p.id).set({t:p.t,ts:p.ts,item:p.item,note:p.note,w:p.w,h:p.h,img:p.img});
+async function pushMeta(){ if(!user) return; const m={}; F.forEach(k=>m[k]=$('#'+k).value); await fs.collection('rooms').doc(room).collection('meta').doc('main').set(m); }
+async function pull(){
+  if(!user) return;
+  const snap=await col().get(), ids=new Set(), have=new Set(photos.map(p=>p.id));
+  for(const d of snap.docs){ ids.add(d.id); if(!have.has(d.id)){ const p={id:d.id,...d.data(),up:true}; photos.push(p); await savePhoto(p); } }
+  for(const p of [...photos]){ if(p.up&&!ids.has(p.id)){ photos=photos.filter(q=>q!==p); await delPhoto(p.id); } }
+  const m=await fs.collection('rooms').doc(room).collection('meta').doc('main').get();
+  if(m.exists){ const v=m.data(); F.forEach(k=>{ if(v[k]&&!$('#'+k).value) $('#'+k).value=v[k]; }); saveMeta(); }
+  render();
+}
+async function syncAll(){
+  if(!ready()){ toast('Konfigurasi Firebase belum diisi di file',4500); return; }
+  const b=$('#sync'); b.disabled=true;
+  try{
+    if(!user) throw new Error('Isi Kode sinkron dulu');
+    const todo=photos.filter(p=>!p.up); let n=0;
+    for(const p of todo){ b.textContent='Mengunggah '+(++n)+' / '+todo.length+'\u2026'; await push(p); p.up=true; await savePhoto(p); }
+    await pushMeta(); await pull();
+    toast('Tersinkron ke cloud');
+  }catch(err){ toast(String(err&&err.message||'Sinkron gagal').slice(0,140),5000); }
+  b.disabled=false; render();
+}
+$('#sync').addEventListener('click',syncAll);
+F.forEach(k=>$('#'+k).addEventListener('change',()=>{ pushMeta().catch(()=>{}); }));
+
 async function makePDF(mode){
   if(!window.jspdf){ toast('Pustaka PDF belum termuat, coba lagi sebentar'); return; }
   const btn=$(mode==='drive'?'#drive':'#pdf'), orig=btn.textContent; btn.disabled=true; btn.textContent='Memproses…';
   try{
-    const {jsPDF}=window.jspdf, d=new jsPDF({unit:'mm',format:'a4'}), W=210, M=15, BW=W-2*M;
-    const list=[...photos].sort((a,b)=>a.t-b.t);
-    const meta=k=>($('#'+k).value||'-');
-    d.setFont('helvetica','bold'); d.setFontSize(17); d.text('LAPORAN DOKUMENTASI PENGAWASAN',M,35);
-    d.setFont('helvetica','normal'); d.setFontSize(11);
-    let y=50;
-    [['Proyek',meta('proyek')],['Lokasi',meta('lokasi')],['Pengawas',meta('pengawas')],
-     ['Jumlah foto',String(list.length)],['Foto pertama',list[0].ts],['Foto terakhir',list[list.length-1].ts],
-     ['Dicetak',stamp(new Date())]].forEach(([k,v])=>{
-      d.setFont('helvetica','bold'); d.text(k,M,y); d.setFont('helvetica','normal');
-      const t=d.splitTextToSize(String(v),BW-35); d.text(t,M+35,y); y+=6*t.length+3;
-    });
-    d.setFontSize(9); d.setTextColor(110);
-    d.text('Setiap foto memuat stempel tanggal dan jam saat diambil.',M,y+6); d.setTextColor(0);
-
-    list.forEach((p,i)=>{
-      if(i%2===0){ d.addPage(); }
-      const top=14+(i%2)*140, bw=BW, bh=100, sc=Math.min(bw/p.w,bh/p.h), iw=p.w*sc, ih=p.h*sc;
-      d.addImage(p.img,'JPEG',M+(bw-iw)/2,top,iw,ih);
-      let ty=top+bh+6;
-      d.setFont('helvetica','bold'); d.setFontSize(10);
-      d.text('Foto '+(i+1)+(p.item?' - '+p.item:''),M,ty,{maxWidth:BW}); ty+=5;
-      d.setFont('helvetica','normal'); d.setFontSize(9); d.setTextColor(90);
-      d.text(p.ts,M,ty); ty+=5; d.setTextColor(0);
-      if(p.note){ const t=d.splitTextToSize('Catatan: '+p.note,BW).slice(0,4); d.text(t,M,ty); }
-    });
+    const {jsPDF}=window.jspdf, d=new jsPDF({unit:'mm',format:'a4'});
+    const list=[...photos].sort((x,y)=>x.t-y.t);
+    bast(d,list);
     const n=d.getNumberOfPages();
-    for(let i=2;i<=n;i++){ d.setPage(i); d.setFontSize(8); d.setTextColor(120); d.text('Hal. '+i+' / '+n,W-M,290,{align:'right'}); }
-
+    for(let i=1;i<=n;i++){ d.setPage(i); d.setFont('helvetica','normal'); d.setFontSize(8); d.setTextColor(120); d.text('Hal. '+i+' / '+n,192,290,{align:'right'}); d.setTextColor(0); }
     const blob=d.output('blob');
     const t=new Date(), fn='Dokumentasi-Pengawasan-'+t.getFullYear()+pad(t.getMonth()+1)+pad(t.getDate())+'.pdf';
-    if(mode==='drive'){
-      let mcp=null; try{ mcp=window.claude&&await claude.use('mcp'); }catch(e){}
-      if(!mcp){ toast('Google Drive tidak tersedia di tampilan ini. Pakai Unduh PDF.',4500); }
-      else {
-        const b64=await new Promise((ok,no)=>{ const r=new FileReader(); r.onload=()=>ok(String(r.result).split(',')[1]); r.onerror=no; r.readAsDataURL(blob); });
-        const res=await mcp.callTool('Google Drive','create_file',{title:fn,base64Content:b64,contentMimeType:'application/pdf',disableConversionToGoogleType:true,parentId:FOLDER});
-        const u=res&&res.payload&&res.payload.viewUrl, L=$('#dlink'); L.textContent='Tersimpan di Google Drive: ';
-        if(u){ const a=document.createElement('a'); a.href=u; a.target='_blank'; a.rel='noopener'; a.textContent=fn; L.appendChild(a); } else L.textContent+=fn;
-        toast('PDF tersimpan di Google Drive');
-      }
-    } else {
-      let dl=null; try{ dl=window.claude&&await claude.use('downloads'); }catch(e){}
-      if(dl){ await dl.save({filename:fn,data:blob}); toast('PDF siap disimpan'); }
+    {
+      const f=new File([blob],fn,{type:'application/pdf'});
+      if(navigator.canShare&&navigator.canShare({files:[f]})){ try{ await navigator.share({files:[f],title:fn}); }catch(e){ if(e.name!=='AbortError') throw e; } }
       else { const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=fn; a.click(); }
     }
-  }catch(err){
-    const c=err&&err.code;
-    if(c==='declined') toast('Penyimpanan dibatalkan');
-    else if(c==='needs_reauth') toast('Sambungkan ulang Google Drive di Pengaturan > Konektor, lalu coba lagi',5000);
-    else if(c==='server_not_connected') toast('Google Drive belum terhubung. Tambahkan di Pengaturan > Konektor.',5000);
-    else if(c==='not_in_manifest'||c==='approval_required') toast('Izin Google Drive ditolak untuk halaman ini. Pakai Unduh PDF.',5000);
-    else if(mode==='drive') toast('Unggah ke Drive gagal; file mungkin belum tersimpan. Coba lagi atau Unduh PDF.',5000);
-    else toast('Ekspor gagal: '+(err&&err.message||'coba lagi'),4000);
-  }
+  }catch(err){ toast(String(err&&err.message||'Gagal, coba lagi').slice(0,140),5000); }
   btn.disabled=!photos.length; btn.textContent=orig;
 }
 $('#pdf').addEventListener('click',()=>makePDF('file'));
-$('#drive').addEventListener('click',()=>makePDF('drive'));
+$('#drive').addEventListener('click',()=>pull().then(()=>toast('Foto dimuat dari cloud')).catch(e=>toast(String(e.message||'Gagal').slice(0,120))));
 
 (async()=>{
   loadMeta(); await openDB();
   const all=await idb('readonly', s=>s.getAll()); if(all) photos=all;
   if(!db) toast('Penyimpanan perangkat tidak tersedia; ekspor PDF sebelum menutup halaman',5000);
-  render();
+  render(); if(!fbInit()) upd();
 })();
 </script>
 </body>
