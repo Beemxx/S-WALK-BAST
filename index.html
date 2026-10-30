@@ -65,6 +65,7 @@ textarea{resize:vertical;min-height:44px}
     <div class="hint">Isi item dulu, lalu ambil foto. Nama item ikut tercetak di foto bersama tanggal dan jam.</div>
   </div>
 
+  <div class="hint" id="cstat" style="margin:0 0 6px">Cloud: belum tersambung</div>
   <button class="btn sec" id="sync" style="margin-bottom:10px">Unggah foto ke Drive (0 tertunda)</button>
   <div class="row" style="margin-bottom:12px">
     <button class="btn" id="drive" disabled>Muat foto dari cloud</button>
@@ -159,6 +160,7 @@ $('#cam').addEventListener('change', async e=>{
   for(const f of fs){ try{ await processFile(f); }catch(err){ toast('Foto gagal diproses'); } }
   $('#note').value='';
   render(); toast('Foto tersimpan');
+  if(user) syncAll();
 });
 
 function render(){
@@ -226,7 +228,15 @@ function bast(d,list){
     if(p.note) d.text(d.splitTextToSize('Catatan: '+p.note,BW).slice(0,3),M,ty);
   });
 }
-// ---- Firebase (login Google + Firestore) ----
+// ---- Firebase (Firestore, tanpa login) ----
+const cstat=t=>{ const e=$('#cstat'); if(e) e.textContent='Cloud: '+t; };
+function errTxt(err){
+  const c=err&&err.code||'';
+  if(c==='permission-denied') return 'DITOLAK. Firestore > Rules harus memakai aturan rooms lalu di-Publish';
+  if(c==='unavailable'||/network|offline/i.test(String(err&&err.message))) return 'tidak ada koneksi internet';
+  if(/exceeds|too large|size/i.test(String(err&&err.message))) return 'foto terlalu besar untuk Firestore';
+  return String(err&&err.message||err||'gagal').slice(0,100);
+}
 // GANTI nilai di bawah dengan firebaseConfig milikmu (Project settings > Your apps > Web).
 const FB={apiKey:'AIzaSyD9LAXbm6MgdNpCe8eWqsTGb30dkduUEpc',authDomain:'bast-f56b8.firebaseapp.com',projectId:'bast-f56b8',appId:'1:407901148261:web:69a53e963d9b5b45ebe28c'};
 let fs=null, user=null, room='';
@@ -243,7 +253,7 @@ function setRoom(r){
   r=(r||'').trim().replace(/[^A-Za-z0-9_-]/g,'');
   if(r.length<12){ toast('Kode terlalu pendek (minimal 12 karakter)',4000); return; }
   room=r; user=r; try{ localStorage.setItem('room',r); }catch(e){}
-  $('#room').value=r; upd(); pull().catch(()=>{});
+  $('#room').value=r; upd(); pull().then(()=>cstat('tersambung, kode '+room.slice(0,10)+'…')).catch(e=>{ cstat(errTxt(e)); toast('Cloud: '+errTxt(e),6000); });
 }
 $('#newroom').addEventListener('click',()=>{ if(!ready()){ toast('Konfigurasi Firebase belum diisi',4000); return; } if(confirm('Buat kode baru? Foto di ponsel ini tidak akan terhubung ke kode lama.')) setRoom(newCode()); });
 $('#useroom').addEventListener('click',()=>{ if(!ready()){ toast('Konfigurasi Firebase belum diisi',4000); return; } setRoom($('#room').value); });
@@ -261,20 +271,24 @@ async function pull(){
   for(const d of snap.docs){ ids.add(d.id); if(!have.has(d.id)){ const p={id:d.id,...d.data(),up:true}; photos.push(p); await savePhoto(p); } }
   for(const p of [...photos]){ if(p.up&&!ids.has(p.id)){ photos=photos.filter(q=>q!==p); await delPhoto(p.id); } }
   const m=await fs.collection('rooms').doc(room).collection('meta').doc('main').get();
-  if(m.exists){ const v=m.data(); F.forEach(k=>{ if(v[k]&&!$('#'+k).value) $('#'+k).value=v[k]; }); saveMeta(); }
+  if(m.exists){ const v=m.data(); F.forEach(k=>{ const cur=$('#'+k).value; if(v[k]&&(!cur||cur===DEF[k])) $('#'+k).value=v[k]; }); saveMeta(); }
   render();
 }
+let syncing=false;
 async function syncAll(){
   if(!ready()){ toast('Konfigurasi Firebase belum diisi di file',4500); return; }
-  const b=$('#sync'); b.disabled=true;
+  if(!user){ toast('Isi Kode sinkron dulu',3500); return; }
+  if(syncing) return;
+  syncing=true; const b=$('#sync'); b.disabled=true; let bad=false;
   try{
-    if(!user) throw new Error('Isi Kode sinkron dulu');
     const todo=photos.filter(p=>!p.up); let n=0;
     for(const p of todo){ b.textContent='Mengunggah '+(++n)+' / '+todo.length+'\u2026'; await push(p); p.up=true; await savePhoto(p); }
     await pushMeta(); await pull();
-    toast('Tersinkron ke cloud');
-  }catch(err){ toast(String(err&&err.message||'Sinkron gagal').slice(0,140),5000); }
-  b.disabled=false; render();
+    cstat('tersinkron ('+photos.length+' foto)');
+    if(todo.length) toast('Tersinkron ke cloud');
+  }catch(err){ bad=true; cstat(errTxt(err)); toast('Sinkron gagal: '+errTxt(err),6000); }
+  syncing=false; b.disabled=false; render();
+  if(!bad&&photos.some(p=>!p.up)) syncAll();
 }
 $('#sync').addEventListener('click',syncAll);
 F.forEach(k=>$('#'+k).addEventListener('change',()=>{ pushMeta().catch(()=>{}); }));
